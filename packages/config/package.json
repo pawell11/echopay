@@ -1,0 +1,11 @@
+{
+  "name": "@vantagepay/config",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}

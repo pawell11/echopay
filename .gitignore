@@ -1,0 +1,53 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+
+# turbo
+.turbo/
+
+# build outputs
+dist/
+build/
+target/
+
+# environment
+.env
+.env*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# testing
+coverage/
+
+# vercel
+.vercel
+
+# data
+data/
+
+# rust / anchor
+apps/contracts/target/
+**/*.rs.bk
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
