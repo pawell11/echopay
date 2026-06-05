@@ -353,8 +353,6 @@ export default function CardsPage() {
   // Issue card
   const handleIssueCard = useCallback(async () => {
     setIsIssuing(true);
-    // Simulate API call
-    await new Promise((r) => setTimeout(r, 1200));
 
     const newCard: VirtualCard = {
       id: `card_${Date.now()}`,

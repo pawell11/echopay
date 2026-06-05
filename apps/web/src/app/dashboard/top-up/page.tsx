@@ -260,8 +260,6 @@ function TopUpContent() {
     if (!selectedCard || amountNum <= 0) return;
 
     setIsToppingUp(true);
-    // Simulate API call
-    await new Promise((r) => setTimeout(r, 1500));
 
     // Update card balance in cache
     const option = CURRENCY_OPTIONS.find((o) => o.value === currency)!;
