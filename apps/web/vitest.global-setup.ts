@@ -3,8 +3,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 let serverProcess: ChildProcess | null = null;
 
 export async function setup(): Promise<void> {
-  serverProcess = spawn("pnpm", ["dev", "-p", "3099"], {
-    cwd: "/root/vantagepay/apps/web",
+  serverProcess = spawn(process.execPath, [
+    require.resolve("next/dist/bin/next"),
+    "dev",
+    "-p",
+    "3099",
+  ], {
+    cwd: process.cwd(),
     stdio: "pipe",
     env: { ...process.env, PORT: "3099" },
   });
