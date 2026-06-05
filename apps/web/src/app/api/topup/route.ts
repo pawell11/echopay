@@ -13,6 +13,8 @@ import {
   calculateFee,
   calculateCashback,
   generateId,
+  persistUpdateBalance,
+  persistCreateTx,
 } from "@/lib/api-store";
 
 import type { ApiResponse, TopUpRequest, TopUpResponse } from "@vantagepay/api";
@@ -85,82 +87,66 @@ export async function POST(request: Request): Promise<NextResponse<ApiResponse<T
   // -----------------------------------------------------------------------
   // 4. Update card balance (store in cents)
   // -----------------------------------------------------------------------
-  const updatedCard = {
+const updatedCard = {
     ...card,
     balance: card.balance + netCredit,
   };
-  store.cards.set(cardId, updatedCard);
+  // Persist to SQLite
+  persistUpdateBalance(cardId, netCredit);
 
   // -----------------------------------------------------------------------
   // 5. Record transactions
   // -----------------------------------------------------------------------
   const now = new Date().toISOString();
-  const txSignature = `mock_sig_${generateId("tx")}_${Date.now().toString(36)}`;
+  const txSignature = `sig_${Date.now().toString(36)}`;
 
   // Top-up transaction
-  const topupTx = {
+  const topupData = {
     id: generateId("tx"),
     cardId,
-    type: "topup" as const,
+    walletAddress,
+    type: "topup",
     amount,
     currency,
     merchant: null,
-    status: "completed" as const,
+    status: "completed",
     txSignature,
-    createdAt: now,
     description: `Top-up ${amount} ${currency} → Card ••••${card.last4}`,
   };
-  store.transactions.push(topupTx);
+  persistCreateTx(topupData);
 
-  // Fee transaction (if any fee)
+  // Fee transaction (if any)
   if (fee > 0) {
-    store.transactions.push({
+    persistCreateTx({
       id: generateId("tx"),
       cardId,
-      type: "fee" as const,
+      walletAddress,
+      type: "fee",
       amount: fee,
       currency,
       merchant: null,
-      status: "completed" as const,
+      status: "completed",
       txSignature: null,
-      createdAt: now,
       description: `${currency === "ECHO" ? "1" : "5"}% fee on ${amount} ${currency} top-up`,
     });
   }
 
   // Cashback transaction (if any)
   if (cashback > 0) {
-    store.transactions.push({
+    persistCreateTx({
       id: generateId("tx"),
       cardId,
-      type: "topup" as const,
+      walletAddress,
+      type: "cashback",
       amount: cashback,
       currency: "ECHO",
       merchant: null,
-      status: "completed" as const,
+      status: "completed",
       txSignature: null,
-      createdAt: now,
-      description: `2% ECHO cashback on fee`,
+      description: "2% ECHO cashback on fee",
     });
   }
 
-  // Sample purchase transaction for demo realism
-  store.transactions.push({
-    id: generateId("tx"),
-    cardId,
-    type: "purchase" as const,
-    amount: Math.round(amount * 0.15), // mock a 15 % spend after top-up
-    currency: "USD",
-    merchant: "Demo Merchant (sample)",
-    status: "completed" as const,
-    txSignature: null,
-    createdAt: new Date(Date.now() + 60_000).toISOString(), // 1 min later
-    description: "Sample purchase after top-up",
-  });
-
-  // -----------------------------------------------------------------------
-  // 6. Respond
-  // -----------------------------------------------------------------------
   return NextResponse.json(
     {
       success: true,

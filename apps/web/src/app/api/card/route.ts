@@ -12,6 +12,7 @@ import {
   generateCardNumber,
   generateCVV,
   generateId,
+  persistCreateCard,
 } from "@/lib/api-store";
 
 import type { ApiResponse, VirtualCard } from "@vantagepay/api";
@@ -92,9 +93,8 @@ export async function POST(request: Request): Promise<NextResponse<ApiResponse<V
     cvv,
   };
 
-  store.cards.set(id, card);
-  store.cardDetails.set(id, details);
-  store.cardOwners.set(id, walletAddress);
+  // Persist to SQLite (replaces in-memory Map writes)
+  persistCreateCard(card, cardNumber, cvv, walletAddress);
 
   return NextResponse.json(
     { success: true, data: card },

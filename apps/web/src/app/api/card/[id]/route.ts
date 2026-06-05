@@ -4,7 +4,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { getStore } from "@/lib/api-store";
+import { getStore, persistCloseCard } from "@/lib/api-store";
 
 import type { ApiResponse, CardDetails, VirtualCard } from "@vantagepay/api";
 
@@ -95,12 +95,8 @@ export async function DELETE(
     status: "closed",
   };
 
-  const store = getStore();
-  store.cards.set(id, closedCard);
-
-  // Update details to stay in sync
-  const details = store.cardDetails.get(id)!;
-  store.cardDetails.set(id, { ...details, status: "closed" });
+  // Close in SQLite (persistent)
+  persistCloseCard(id);
 
   return NextResponse.json(
     { success: true, data: closedCard },

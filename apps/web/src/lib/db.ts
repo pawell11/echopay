@@ -8,7 +8,7 @@ import Database, { type Database as DatabaseType } from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 
-const DATA_DIR = path.resolve("/root/vantagepay/data");
+const DATA_DIR = path.resolve(process.cwd(), "..", "..", "data");
 const DB_PATH = path.join(DATA_DIR, "vantagepay.db");
 
 // Ensure data directory exists
@@ -133,6 +133,10 @@ const stmtGetTxsByWallet = db.prepare(`
   ORDER BY created_at DESC LIMIT ?
 `);
 
+const stmtGetAllTxs = db.prepare(`
+  SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?
+`);
+
 const stmtGetTxsByCard = db.prepare(`
   SELECT * FROM transactions WHERE card_id = ?
   ORDER BY created_at DESC LIMIT ?
@@ -236,6 +240,11 @@ export const cards = {
     return stmtGetCardsByWallet.all(walletAddress) as CardRow[];
   },
 
+  getAll(): CardRow[] {
+    const stmt = db.prepare("SELECT id, last4, expiry_month, expiry_year, brand, status, balance, currency, label, created_at, frozen_at FROM cards ORDER BY created_at DESC");
+    return stmt.all() as CardRow[];
+  },
+
   getById(id: string): CardRow | undefined {
     return stmtGetCardById.get(id) as CardRow | undefined;
   },
@@ -289,6 +298,10 @@ export const transactions = {
 
   getByWallet(walletAddress: string, limit = 50): TxRow[] {
     return stmtGetTxsByWallet.all(walletAddress, limit) as TxRow[];
+  },
+
+  getAll(limit = 200): TxRow[] {
+    return stmtGetAllTxs.all(limit) as TxRow[];
   },
 
   getByCard(cardId: string, limit = 50): TxRow[] {

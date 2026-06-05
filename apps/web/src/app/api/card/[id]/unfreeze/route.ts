@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { getStore } from "@/lib/api-store";
+import { getStore, persistUnfreezeCard } from "@/lib/api-store";
 
 import type { ApiResponse, VirtualCard } from "@vantagepay/api";
 
@@ -64,13 +64,7 @@ export async function POST(
     frozenAt: null,
   };
 
-  cards.set(id, activeCard);
-
-  // Keep details in sync
-  const details = getStore().cardDetails.get(id);
-  if (details) {
-    getStore().cardDetails.set(id, { ...details, status: "active", frozenAt: null });
-  }
+  persistUnfreezeCard(id);
 
   return NextResponse.json(
     { success: true, data: activeCard },

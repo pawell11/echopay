@@ -1,93 +1,18 @@
 /**
- * In-memory API store for VantagePay mock backend.
+ * API store — SQLite-backed persistence layer.
  *
- * Simulates a real card issuer database. All data lives in process memory
- * and resets on server restart — replace with a real database (e.g. Postgres,
- * PlanetScale, or Redis) for production.
+ * Provides the getStore() / generateCardNumber() / etc. interface that
+ * API routes expect, backed by better-sqlite3 instead of in-memory Maps.
+ * Data survives server restarts.
  */
-
-import type {
-  VirtualCard,
-  CardDetails,
-  Transaction,
-  UserProfile,
-} from "@vantagepay/api";
+import { wallets, cards as cardDb, transactions as txDb } from "@/lib/db";
+import type { VirtualCard, CardDetails, Transaction, UserProfile } from "@vantagepay/api";
 
 // ---------------------------------------------------------------------------
-// Store shape
+// Helpers
 // ---------------------------------------------------------------------------
 
-interface Store {
-  /** Card public metadata keyed by card ID */
-  cards: Map<string, VirtualCard>;
-  /** Full card details (number, CVV) keyed by card ID */
-  cardDetails: Map<string, CardDetails>;
-  /** cardId → walletAddress ownership lookup */
-  cardOwners: Map<string, string>;
-  /** All transactions across all wallets */
-  transactions: Transaction[];
-}
-
-const store: Store = {
-  cards: new Map(),
-  cardDetails: new Map(),
-  cardOwners: new Map(),
-  transactions: [],
-};
-
-let seeded = false;
-
-// ---------------------------------------------------------------------------
-// Public helpers
-// ---------------------------------------------------------------------------
-
-export function getStore(): Store {
-  if (!seeded) {
-    seedStore();
-    seeded = true;
-  }
-  return store;
-}
-
-/**
- * Generate a valid 16-digit Mastercard PAN using a known BIN prefix
- * and Luhn check digit.
- */
-export function generateCardNumber(): string {
-  const prefix = "5573"; // Mastercard BIN
-  let number = prefix;
-  for (let i = 0; i < 11; i++) {
-    number += Math.floor(Math.random() * 10).toString();
-  }
-  return number + calculateLuhnCheckDigit(number);
-}
-
-/** Generate a 3-digit random CVV */
-export function generateCVV(): string {
-  return Math.floor(100 + Math.random() * 900).toString();
-}
-
-/** Fee calculation: 5 % for SOL/USDT, 1 % for ECHO */
-export function calculateFee(amount: number, currency: string): number {
-  if (currency === "ECHO") return Math.round(amount * 0.01);
-  return Math.round(amount * 0.05);
-}
-
-/** Cashback: 2 % of the fee when paying with ECHO, zero otherwise */
-export function calculateCashback(fee: number, currency: string): number {
-  return currency === "ECHO" ? Math.round(fee * 0.02) : 0;
-}
-
-/** Simple pseudo-random ID for demo records */
-export function generateId(prefix = "id"): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-// ---------------------------------------------------------------------------
-// Luhn algorithm
-// ---------------------------------------------------------------------------
-
-function calculateLuhnCheckDigit(number: string): number {
+function luhnCheckDigit(number: string): number {
   const digits = number.split("").map(Number);
   let sum = 0;
   let isEven = true;
@@ -101,150 +26,157 @@ function calculateLuhnCheckDigit(number: string): number {
   return (10 - (sum % 10)) % 10;
 }
 
+export function generateCardNumber(): string {
+  const prefix = "5573";
+  let number = prefix;
+  for (let i = 0; i < 11; i++) {
+    number += Math.floor(Math.random() * 10);
+  }
+  return number + luhnCheckDigit(number);
+}
+
+export function generateCVV(): string {
+  return String(Math.floor(100 + Math.random() * 900));
+}
+
+export function generateId(prefix = "id"): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function calculateFee(amount: number, currency: string): number {
+  return currency === "ECHO" ? Math.round(amount * 0.01) : Math.round(amount * 0.05);
+}
+
+export function calculateCashback(fee: number, currency: string): number {
+  return currency === "ECHO" ? Math.round(fee * 0.02) : 0;
+}
+
 // ---------------------------------------------------------------------------
-// Seed demo data
+// Store interface — re-built from SQLite on every getStore() call
 // ---------------------------------------------------------------------------
 
-function seedStore(): void {
-  const wallet = "DemoWallet11111111111111111111111111111";
-  const now = Date.now();
-  const day = 86_400_000;
+interface Store {
+  cards: Map<string, VirtualCard>;
+  cardDetails: Map<string, CardDetails>;
+  cardOwners: Map<string, string>;
+  transactions: Transaction[];
+}
 
-  // --- Card 1 (active) ---
-  const card1: VirtualCard = {
-    id: "card_demo_1",
-    last4: "3456",
-    expiryMonth: "12",
-    expiryYear: String(new Date(now + day * 365 * 3).getFullYear()),
-    brand: "mastercard",
-    status: "active",
-    balance: 125_00, // $125.00 in cents
-    currency: "USD",
-    createdAt: new Date(now - day * 30).toISOString(),
-    frozenAt: null,
-    label: "Daily Spend",
-  };
+export function getStore(): Store {
+  const cards = new Map<string, VirtualCard>();
+  const cardDetails = new Map<string, CardDetails>();
+  const cardOwners = new Map<string, string>();
+  const txs: Transaction[] = [];
 
-  const card1Details: CardDetails = {
-    ...card1,
-    cardNumber: "5573123400003456",
-    cvv: "781",
-  };
+  // Hydrate cards from SQLite
+  const allCards = cardDb.getAll();
+  for (const row of allCards) {
+    const card: VirtualCard = {
+      id: row.id,
+      last4: row.last4,
+      expiryMonth: row.expiry_month,
+      expiryYear: row.expiry_year,
+      brand: row.brand as VirtualCard["brand"],
+      status: row.status as VirtualCard["status"],
+      balance: row.balance,
+      currency: row.currency,
+      createdAt: row.created_at,
+      frozenAt: row.frozen_at ?? null,
+      label: row.label ?? null,
+    };
+    cards.set(row.id, card);
 
-  store.cards.set(card1.id, card1);
-  store.cardDetails.set(card1.id, card1Details);
-  store.cardOwners.set(card1.id, wallet);
+    // Full details from SQLite (card_number, cvv stored)
+    const full = cardDb.getFullById(row.id);
+    if (full) {
+      cardDetails.set(row.id, {
+        ...card,
+        cardNumber: full.card_number,
+        cvv: full.cvv,
+      });
+      cardOwners.set(row.id, full.wallet_address);
+    }
+  }
 
-  // --- Card 2 (frozen) ---
-  const card2: VirtualCard = {
-    id: "card_demo_2",
-    last4: "7890",
-    expiryMonth: "06",
-    expiryYear: String(new Date(now + day * 365 * 2).getFullYear()),
-    brand: "mastercard",
-    status: "frozen",
-    balance: 42_50, // $42.50 in cents
-    currency: "USD",
-    createdAt: new Date(now - day * 14).toISOString(),
-    frozenAt: new Date(now - day * 2).toISOString(),
-    label: "Travel Card",
-  };
+  // Hydrate transactions from SQLite
+  const allTxs = txDb.getAll();
+  for (const row of allTxs) {
+    txs.push({
+      id: row.id,
+      cardId: row.card_id,
+      walletAddress: row.wallet_address,
+      type: row.type as Transaction["type"],
+      amount: row.amount,
+      currency: row.currency,
+      merchant: row.merchant ?? undefined,
+      status: row.status as Transaction["status"],
+      txSignature: row.tx_signature ?? undefined,
+      description: row.description ?? undefined,
+      createdAt: row.created_at,
+    });
+  }
 
-  const card2Details: CardDetails = {
-    ...card2,
-    cardNumber: "5573123400007890",
-    cvv: "429",
-  };
+  return { cards, cardDetails, cardOwners, transactions: txs };
+}
 
-  store.cards.set(card2.id, card2);
-  store.cardDetails.set(card2.id, card2Details);
-  store.cardOwners.set(card2.id, wallet);
+// ---------------------------------------------------------------------------
+// Persistence helpers — called by API route handlers for write operations
+// ---------------------------------------------------------------------------
 
-  // --- Demo transactions ---
-  store.transactions = [
-    {
-      id: "tx_demo_1",
-      cardId: "card_demo_1",
-      type: "topup",
-      amount: 200_00,
-      currency: "USDT",
-      merchant: null,
-      status: "completed",
-      txSignature: "mock_sig_topup_1",
-      createdAt: new Date(now - day * 25).toISOString(),
-      description: "Top-up 200 USDT → Card Daily Spend",
-    },
-    {
-      id: "tx_demo_2",
-      cardId: "card_demo_1",
-      type: "purchase",
-      amount: 45_99,
-      currency: "USD",
-      merchant: "Amazon Web Services",
-      status: "completed",
-      txSignature: null,
-      createdAt: new Date(now - day * 20).toISOString(),
-      description: "Purchase at Amazon Web Services",
-    },
-    {
-      id: "tx_demo_3",
-      cardId: "card_demo_1",
-      type: "purchase",
-      amount: 12_50,
-      currency: "USD",
-      merchant: "Netflix",
-      status: "completed",
-      txSignature: null,
-      createdAt: new Date(now - day * 15).toISOString(),
-      description: "Purchase at Netflix",
-    },
-    {
-      id: "tx_demo_4",
-      cardId: "card_demo_2",
-      type: "topup",
-      amount: 100_00,
-      currency: "SOL",
-      merchant: null,
-      status: "completed",
-      txSignature: "mock_sig_topup_2",
-      createdAt: new Date(now - day * 10).toISOString(),
-      description: "Top-up 100 SOL → Card Travel Card",
-    },
-    {
-      id: "tx_demo_5",
-      cardId: "card_demo_2",
-      type: "purchase",
-      amount: 57_50,
-      currency: "USD",
-      merchant: "Uber",
-      status: "completed",
-      txSignature: null,
-      createdAt: new Date(now - day * 5).toISOString(),
-      description: "Purchase at Uber",
-    },
-    {
-      id: "tx_demo_6",
-      cardId: "card_demo_1",
-      type: "fee",
-      amount: 10_00,
-      currency: "USDT",
-      merchant: null,
-      status: "completed",
-      txSignature: null,
-      createdAt: new Date(now - day * 25).toISOString(),
-      description: "5 % fee on 200 USDT top-up",
-    },
-    {
-      id: "tx_demo_7",
-      cardId: "card_demo_2",
-      type: "fee",
-      amount: 5_00,
-      currency: "SOL",
-      merchant: null,
-      status: "completed",
-      txSignature: null,
-      createdAt: new Date(now - day * 10).toISOString(),
-      description: "5 % fee on 100 SOL top-up",
-    },
-  ];
+/** Create a new card + its full details + ownership record in SQLite. */
+export function persistCreateCard(
+  card: VirtualCard,
+  cardNumber: string,
+  cvv: string,
+  walletAddress: string,
+): void {
+  wallets.getOrCreate(walletAddress);
+  cardDb.create({
+    id: card.id,
+    walletAddress,
+    cardNumber,
+    last4: card.last4,
+    cvv,
+    expiryMonth: card.expiryMonth,
+    expiryYear: card.expiryYear,
+    brand: card.brand,
+    balance: card.balance,
+    label: card.label,
+  });
+}
+
+/** Close a card (set status to 'closed') in SQLite. */
+export function persistCloseCard(id: string): void {
+  cardDb.updateStatus(id, "closed");
+}
+
+/** Freeze a card in SQLite. */
+export function persistFreezeCard(id: string): void {
+  cardDb.updateStatus(id, "frozen");
+}
+
+/** Unfreeze a card in SQLite. */
+export function persistUnfreezeCard(id: string): void {
+  cardDb.updateStatus(id, "active");
+}
+
+/** Update card balance in SQLite. */
+export function persistUpdateBalance(id: string, delta: number): void {
+  cardDb.updateBalance(id, delta);
+}
+
+/** Record a transaction in SQLite. */
+export function persistCreateTx(params: {
+  id: string;
+  cardId: string;
+  walletAddress: string;
+  type: string;
+  amount: number;
+  currency?: string;
+  merchant?: string | null;
+  status?: string;
+  txSignature?: string | null;
+  description?: string | null;
+}): void {
+  txDb.create(params as Parameters<typeof txDb.create>[0]);
 }
